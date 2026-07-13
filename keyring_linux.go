@@ -56,8 +56,8 @@ public class CredManager {
     [DllImport("advapi32.dll", SetLastError = true)]
     public static extern bool CredDelete(string target, int type, int flags);
 
-	[DllImport("advapi32", SetLastError = true, CharSet = CharSet.Unicode)]
-    static extern bool CredEnumerate(string filter, int flag, out int count, out IntPtr pCredentials);
+    [DllImport("advapi32.dll", SetLastError = true, CharSet = CharSet.Unicode)]
+    public static extern bool CredEnumerate(string filter, int flag, out int count, out IntPtr pCredentials);
 
     [DllImport("advapi32.dll", SetLastError = true)]
     public static extern void CredFree([In] IntPtr cred);
@@ -121,6 +121,7 @@ public class CredManager {
 			CredFree(pCredentials);
 		}
 	}
+}
 "@
 `
 
@@ -315,7 +316,7 @@ func (k wslKeychain) list(service string) ([]string, error) {
 		return []string{}, nil
 	}
 	script := credManagerScript + fmt.Sprintf(`
-$result = [CredManager]::ListCredential('%s')
+$result = [CredManager]::ListCredentials('%s')
 if ($result -eq $null) {
     exit 1
 }
