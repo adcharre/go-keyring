@@ -129,6 +129,12 @@ public class CredManager {
 // its exit code, trimmed stdout, and trimmed stderr. The script is passed via
 // -EncodedCommand (UTF-16LE base64) to avoid any shell quoting issues.
 func runPowerShell(script string) (int, string, string, error) {
+	// Silence the progress stream so PowerShell does not emit the
+	// "Preparing modules for first use." record. When stderr is redirected
+	// (as it is here) that record is serialized as CLIXML and would otherwise
+	// be mistaken for a real error.
+	script = "$ProgressPreference = 'SilentlyContinue'\n" + script
+
 	encoded := base64.StdEncoding.EncodeToString(utf16LEEncode(script))
 	cmd := exec.Command("powershell.exe", "-NoProfile", "-NonInteractive", "-EncodedCommand", encoded)
 
@@ -139,11 +145,23 @@ func runPowerShell(script string) (int, string, string, error) {
 	if err := cmd.Run(); err != nil {
 		var exitErr *exec.ExitError
 		if errors.As(err, &exitErr) {
-			return exitErr.ExitCode(), strings.TrimSpace(stdout.String()), strings.TrimSpace(stderr.String()), nil
+			return exitErr.ExitCode(), strings.TrimSpace(stdout.String()), cleanPowerShellStderr(stderr.String()), nil
 		}
 		return -1, "", "", err
 	}
-	return 0, strings.TrimSpace(stdout.String()), strings.TrimSpace(stderr.String()), nil
+	return 0, strings.TrimSpace(stdout.String()), cleanPowerShellStderr(stderr.String()), nil
+}
+
+// cleanPowerShellStderr trims stderr and discards CLIXML-only output. When
+// stderr is redirected, PowerShell serializes non-terminating streams (such as
+// progress records) as a CLIXML document. Such output does not represent a real
+// error, so it is treated as empty.
+func cleanPowerShellStderr(s string) string {
+	s = strings.TrimSpace(s)
+	if strings.HasPrefix(s, "#< CLIXML") {
+		return ""
+	}
+	return s
 }
 
 // escapePowerShellString escapes a value for safe inclusion inside a
@@ -340,12 +358,21 @@ Write-Output $result | ConvertTo-Json -Compress
 		return nil, nil
 	}
 
-	var targets []string
-	err = json.Unmarshal([]byte(jsonStr), &targets)
-	if err != nil {
+	// Windows PowerShell's ConvertTo-Json emits a bare string (not an array)
+	// when the result contains a single element, so try that form first.
+	if strings.HasPrefix(jsonStr, "[") {
+		var targets []string
+		if err := json.Unmarshal([]byte(jsonStr), &targets); err != nil {
+			return nil, fmt.Errorf("wsl keystore: unmarshal credential list: %w", err)
+		}
+		return targets, nil
+	}
+
+	var target string
+	if err := json.Unmarshal([]byte(jsonStr), &target); err != nil {
 		return nil, fmt.Errorf("wsl keystore: unmarshal credential list: %w", err)
 	}
-	return targets, nil
+	return []string{target}, nil
 }
 
 // credName combines service and username to a single string.
